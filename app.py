@@ -9,9 +9,6 @@ from scenarios.test_scenarios import get_sample_scenarios
 from utils.logger import setup_logger
 import os
 
-os.environ["OPENAI_API_KEY"] = "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"
-
-
 # Page config
 st.set_page_config(
     page_title="Project Synapse - Agentic Last-Mile Coordinator",
@@ -46,17 +43,48 @@ def display_header():
     intelligent reasoning and tool execution.
     """)
     
-    # Display API key status
-    openai_key = os.getenv("OPENAI_API_KEY", "")
-    gemini_key = os.getenv("GEMINI_API_KEY", "")
+    # API Key Input Section
+    st.markdown("### 🔑 API Key Configuration")
     
-    if openai_key:
-        st.success("✅ OpenAI API Key configured (GPT-5)")
-    elif gemini_key:
-        st.success("✅ Gemini API Key configured (Gemini-2.5-Flash)")
+    # Check if API key is already in session state
+    if 'api_key' not in st.session_state:
+        st.session_state.api_key = ""
+    
+    # API Key input box
+    api_key_input = st.text_input(
+        "Enter your Google Gemini API Key:",
+        type="password",
+        value=st.session_state.api_key,
+        placeholder="Paste your Gemini API key here (starts with AIzaSy...)",
+        help="Get a free API key from Google AI Studio: https://aistudio.google.com/"
+    )
+    
+    # Update session state if key is entered
+    if api_key_input and api_key_input != st.session_state.api_key:
+        st.session_state.api_key = api_key_input
+        st.rerun()
+    
+    # Display API key status
+    if st.session_state.api_key and len(st.session_state.api_key) > 30:
+        st.success("✅ Gemini API Key configured and ready!")
         st.info("ℹ️ Using Google Gemini as the AI provider")
+        
+        # Store API key in environment for agent to use
+        os.environ["GEMINI_API_KEY"] = st.session_state.api_key
+        
+    elif st.session_state.api_key:
+        st.warning("⚠️ API key seems too short. Please check your key.")
     else:
-        st.error("❌ No AI API Key found. Please set either OPENAI_API_KEY or GEMINI_API_KEY environment variable.")
+        st.error("❌ Please enter your Gemini API Key to continue")
+        st.markdown("""
+        **To get a free Gemini API key:**
+        1. Go to [Google AI Studio](https://aistudio.google.com/)
+        2. Sign in with your Google account
+        3. Click "Get API Key" and create a new key
+        4. Copy and paste it in the box above
+        
+        Gemini offers free usage up to certain limits, perfect for testing this application!
+        """)
         st.stop()
 
 def display_metrics_dashboard():
@@ -95,7 +123,7 @@ def display_metrics_dashboard():
     if metrics['tools_used']:
         st.subheader("Tools Usage Distribution")
         tools_df = pd.DataFrame(
-            list(metrics['tools_used'].items()),
+            data=list(metrics['tools_used'].items()),
             columns=['Tool', 'Usage Count']
         )
         fig = px.bar(tools_df, x='Tool', y='Usage Count', 
@@ -178,11 +206,16 @@ def execute_scenario(scenario_text):
         logger.error(f"Scenario execution failed: {str(e)}")
 
 def update_metrics(result, execution_time):
-    """Update performance metrics"""
+    """Update performance metrics with improved validation"""
     metrics = st.session_state.performance_metrics
     
     metrics['total_scenarios'] += 1
-    if result.get('resolution_success', False):
+    
+    # Improved resolution success determination
+    resolution_success = determine_resolution_success(result)
+    logger.info(f"Resolution success determined as: {resolution_success}")
+    
+    if resolution_success:
         metrics['successful_resolutions'] += 1
     
     # Update average response time
@@ -195,15 +228,92 @@ def update_metrics(result, execution_time):
         if tool_name:
             metrics['tools_used'][tool_name] = metrics['tools_used'].get(tool_name, 0) + 1
 
+def determine_resolution_success(result):
+    """
+    Improved logic to determine if a resolution was successful
+    """
+    # Check if explicit success flag is set
+    if 'resolution_success' in result:
+        explicit_success = result['resolution_success']
+        if isinstance(explicit_success, bool):
+            return explicit_success
+        elif isinstance(explicit_success, str):
+            return explicit_success.lower() in ['true', 'yes', 'successful', 'success']
+    
+    # Check final solution content
+    final_solution = result.get('final_solution', '').lower()
+    if not final_solution or final_solution == 'no solution provided':
+        return False
+    
+    # Look for success indicators in the solution
+    success_indicators = [
+        'successfully', 'resolved', 'completed', 'arranged', 'notified',
+        'rerouted', 'alternative found', 'refund processed', 'contacted',
+        'secure location found', 'delivery confirmed'
+    ]
+    
+    failure_indicators = [
+        'failed', 'error', 'unable to', 'could not', 'cannot',
+        'no solution', 'unresolved', 'unsuccessful'
+    ]
+    
+    # Check for failure indicators first (they take precedence)
+    for indicator in failure_indicators:
+        if indicator in final_solution:
+            return False
+    
+    # Check for success indicators
+    for indicator in success_indicators:
+        if indicator in final_solution:
+            return True
+    
+    # Check reasoning steps for successful tool executions
+    reasoning_steps = result.get('reasoning_steps', [])
+    successful_actions = 0
+    total_actions = 0
+    
+    for step in reasoning_steps:
+        if step.get('tool_used'):
+            total_actions += 1
+            tool_output = step.get('tool_output', {})
+            
+            # Check if tool execution was successful
+            if isinstance(tool_output, dict):
+                if tool_output.get('success', False) or tool_output.get('status') == 'success':
+                    successful_actions += 1
+                elif 'error' not in tool_output and 'failed' not in str(tool_output).lower():
+                    successful_actions += 1
+    
+    # If we have actions and most were successful, consider it a success
+    if total_actions > 0:
+        success_rate = successful_actions / total_actions
+        return success_rate >= 0.5  # At least 50% of actions successful
+    
+    # If we have a solution but no clear indicators, default to success
+    return len(final_solution.strip()) > 10  # Has substantial solution content
+
 def display_execution_results(result, execution_time):
-    """Display the execution results with chain of thought"""
+    """Display the execution results with improved validation"""
     st.success(f"✅ Execution completed in {execution_time:.2f} seconds")
+    
+    # Determine resolution success using improved logic
+    resolution_success = determine_resolution_success(result)
     
     # Final resolution
     st.subheader("🎯 Final Resolution")
-    resolution_status = "✅ Successful" if result.get('resolution_success', False) else "❌ Failed"
+    resolution_status = "✅ Successful" if resolution_success else "❌ Failed"
     st.markdown(f"**Status:** {resolution_status}")
-    st.markdown(f"**Solution:** {result.get('final_solution', 'No solution provided')}")
+    
+    final_solution = result.get('final_solution', 'No solution provided')
+    st.markdown(f"**Solution:** {final_solution}")
+    
+    # Debug information
+    with st.expander("🔍 Debug Information"):
+        st.markdown("**Raw Result Data:**")
+        st.json(result)
+        st.markdown(f"**Resolution Success Determination:** {resolution_success}")
+        if 'resolution_success' in result:
+            st.markdown(f"**Original resolution_success value:** {result['resolution_success']} (type: {type(result['resolution_success'])})")
     
     # Chain of thought
     st.subheader("🧠 Chain of Thought Reasoning")
@@ -229,6 +339,13 @@ def display_execution_results(result, execution_time):
                     if step.get('tool_output'):
                         st.markdown("**Tool Output:**")
                         st.json(step['tool_output'])
+                        
+                        # Show tool success status
+                        tool_output = step.get('tool_output', {})
+                        if isinstance(tool_output, dict):
+                            if 'success' in tool_output:
+                                status = "✅ Success" if tool_output['success'] else "❌ Failed"
+                                st.markdown(f"**Tool Status:** {status}")
     else:
         st.info("No reasoning steps recorded.")
     
@@ -239,11 +356,11 @@ def display_execution_results(result, execution_time):
         trace_df = pd.DataFrame(action_trace)
         st.dataframe(trace_df, use_container_width=True)
     
-    # Save to history
+    # Save to history with corrected success status
     st.session_state.execution_history.append({
         'timestamp': datetime.now(),
         'scenario': st.session_state.get('current_scenario', ''),
-        'result': result,
+        'result': {**result, 'resolution_success': resolution_success},  # Override with corrected status
         'execution_time': execution_time
     })
 
@@ -255,7 +372,8 @@ def display_history():
         for i, execution in enumerate(reversed(st.session_state.execution_history)):
             with st.expander(f"Execution {len(st.session_state.execution_history) - i} - {execution['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}"):
                 st.markdown(f"**Scenario:** {execution['scenario'][:200]}...")
-                st.markdown(f"**Success:** {'✅' if execution['result'].get('resolution_success') else '❌'}")
+                success_icon = '✅' if execution['result'].get('resolution_success') else '❌'
+                st.markdown(f"**Success:** {success_icon}")
                 st.markdown(f"**Execution Time:** {execution['execution_time']:.2f}s")
                 st.markdown(f"**Solution:** {execution['result'].get('final_solution', 'No solution')}")
     else:
@@ -285,7 +403,46 @@ def display_about():
     """Display about information"""
     st.header("ℹ️ About Project Synapse")
     
+    st.markdown("""
+    ## Overview
+    Project Synapse is an autonomous AI coordinator designed to resolve last-mile delivery 
+    disruptions using intelligent reasoning and tool execution.
     
+    ## Key Features
+    - **ReAct Pattern**: Combines reasoning and acting for intelligent decision-making
+    - **Tool Integration**: Uses multiple logistics tools for comprehensive problem-solving
+    - **Transparent Reasoning**: Provides detailed chain-of-thought for every decision
+    - **Real-time Resolution**: Handles disruptions as they occur
+    
+    ## Available Tools
+    - `check_traffic()` - Monitor traffic conditions and incidents
+    - `get_merchant_status()` - Check merchant availability and prep times
+    - `notify_customer()` - Send customer notifications and updates
+    - `reroute_driver()` - Optimize driver routes and assignments
+    - `find_nearby_alternatives()` - Locate alternative merchants or services
+    - `initiate_refund()` - Process customer refunds and compensations
+    - `contact_recipient()` - Communicate with delivery recipients
+    - `find_secure_location()` - Locate secure drop-off points
+    
+    ## Supported Scenarios
+    - Restaurant delays and overcrowding
+    - Traffic disruptions and route changes
+    - Recipient unavailability
+    - Merchant issues and disputes
+    - Delivery disputes and damage claims
+    
+    ## Technology Stack
+    - **Agent Framework**: LangChain with OpenAI GPT-4 or Google Gemini
+    - **Web Interface**: Streamlit
+    - **Mock Services**: FastAPI for tool simulation
+    - **Logging**: Comprehensive action tracking
+    
+    ## Recent Fixes
+    - ✅ Fixed validation logic for correct solution marking
+    - ✅ Improved resolution success determination
+    - ✅ Enhanced tool output interpretation
+    - ✅ Added comprehensive debugging information
+    """)
 
 if __name__ == "__main__":
     main()

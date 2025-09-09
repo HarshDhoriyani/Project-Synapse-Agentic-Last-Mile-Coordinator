@@ -1,473 +1,312 @@
 import json
-import random
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from datetime import datetime, timedelta
-from services.mock_apis import MockLogisticsAPI
-from utils.logger import get_logger
+import random
 
-logger = get_logger(__name__)
+from langchain.tools import Tool
+from langchain_core.tools import tool
+
+from services.mock_apis import MockLogisticsAPI
+
 
 class LogisticsToolkit:
     """
-    Collection of logistics tools that the Synapse agent can use to resolve disruptions.
-    All tools are connected to mock APIs that simulate real-world logistics operations.
+    Collection of logistics tools for the Synapse agent.
+    Each tool simulates real-world logistics operations.
     """
     
     def __init__(self):
         self.api = MockLogisticsAPI()
-        logger.info("Logistics toolkit initialized")
     
-    def check_traffic(self, route_info: str) -> str:
-        """
-        Check current traffic conditions and incidents on specified routes
-        
-        Args:
-            route_info: Route description, coordinates, or area name
-            
-        Returns:
-            JSON string with traffic information
-        """
-        try:
-            logger.info(f"Checking traffic for route: {route_info}")
-            
-            # Parse route information
-            route_data = self._parse_route_info(route_info)
-            
-            # Call mock API
-            traffic_data = self.api.get_traffic_conditions(
-                route_data.get('origin', ''),
-                route_data.get('destination', ''),
-                route_data.get('route_name', route_info)
+    def get_tools(self) -> List[Tool]:
+        """Return the list of available tools for the agent"""
+        return [
+            Tool(
+                name="check_traffic",
+                description="Check traffic conditions and incidents for a specific route or area. Input: {'route': 'pickup to delivery location', 'area': 'city/district name'}",
+                func=self.check_traffic
+            ),
+            Tool(
+                name="get_merchant_status",
+                description="Get merchant availability, prep times, and operational status. Input: {'merchant_id': 'merchant identifier', 'location': 'merchant location'}",
+                func=self.get_merchant_status
+            ),
+            Tool(
+                name="notify_customer",
+                description="Send notifications to customers about order status, delays, or updates. Input: {'customer_id': 'customer identifier', 'message': 'notification message', 'type': 'sms/email/push'}",
+                func=self.notify_customer
+            ),
+            Tool(
+                name="reroute_driver",
+                description="Optimize driver routes or reassign deliveries. Input: {'driver_id': 'driver identifier', 'new_route': 'optimized route', 'priority': 'high/medium/low'}",
+                func=self.reroute_driver
+            ),
+            Tool(
+                name="find_nearby_alternatives",
+                description="Find alternative merchants, pickup points, or service options. Input: {'location': 'current location', 'service_type': 'food/mart/express', 'radius': 'search radius in km'}",
+                func=self.find_nearby_alternatives
+            ),
+            Tool(
+                name="initiate_refund",
+                description="Process customer refunds and compensations. Input: {'order_id': 'order identifier', 'amount': 'refund amount', 'reason': 'refund reason'}",
+                func=self.initiate_refund
+            ),
+            Tool(
+                name="contact_recipient",
+                description="Contact delivery recipients for coordination or updates. Input: {'recipient_id': 'recipient identifier', 'message': 'contact message', 'method': 'call/sms/chat'}",
+                func=self.contact_recipient
+            ),
+            Tool(
+                name="find_secure_location",
+                description="Find secure drop-off locations or pickup points. Input: {'area': 'target area', 'type': 'dropoff/pickup', 'requirements': 'security/accessibility needs'}",
+                func=self.find_secure_location
+            ),
+            Tool(
+                name="update_order_status",
+                description="Update order status and tracking information. Input: {'order_id': 'order identifier', 'status': 'new status', 'notes': 'additional notes'}",
+                func=self.update_order_status
+            ),
+            Tool(
+                name="coordinate_with_support",
+                description="Escalate to human support or coordinate with support teams. Input: {'issue_type': 'issue category', 'priority': 'urgency level', 'details': 'issue details'}",
+                func=self.coordinate_with_support
             )
-            
-            return json.dumps(traffic_data, indent=2)
-            
-        except Exception as e:
-            logger.error(f"Error checking traffic: {str(e)}")
-            return json.dumps({
-                "error": f"Failed to check traffic: {str(e)}",
-                "status": "error"
-            })
+        ]
     
-    def calculate_alternative_route(self, route_params: str) -> str:
-        """
-        Calculate alternative routes when primary route is blocked
-        
-        Args:
-            route_params: Origin, destination, and areas to avoid
-            
-        Returns:
-            JSON string with alternative route suggestions
-        """
+    def check_traffic(self, input_data: str) -> str:
+        """Check traffic conditions and incidents"""
         try:
-            logger.info(f"Calculating alternative route: {route_params}")
+            # Try to parse as JSON first, then as Python dict format
+            try:
+                data = json.loads(input_data)
+            except json.JSONDecodeError:
+                # Convert single quotes to double quotes and try again
+                fixed_input = input_data.replace("'", '"')
+                data = json.loads(fixed_input)
             
-            # Parse route parameters
-            params = self._parse_route_params(route_params)
-            
-            # Call mock API
-            alternative_routes = self.api.calculate_alternative_routes(
-                params.get('origin', ''),
-                params.get('destination', ''),
-                params.get('avoid_areas', [])
+            result = self.api.check_traffic(
+                route=data.get('route', ''),
+                area=data.get('area', '')
             )
-            
-            return json.dumps(alternative_routes, indent=2)
-            
-        except Exception as e:
-            logger.error(f"Error calculating alternative route: {str(e)}")
+            return json.dumps(result)
+        except (json.JSONDecodeError, Exception) as e:
             return json.dumps({
-                "error": f"Failed to calculate alternative route: {str(e)}",
-                "status": "error"
+                'success': False,
+                'error': f'Invalid input format: {str(e)}',
+                'expected_format': '{"route": "pickup to delivery location", "area": "city/district name"}'
             })
     
-    def get_merchant_status(self, merchant_info: str) -> str:
-        """
-        Check merchant availability, prep times, and current status
-        
-        Args:
-            merchant_info: Merchant ID, name, or location
-            
-        Returns:
-            JSON string with merchant status information
-        """
+    def get_merchant_status(self, input_data: str) -> str:
+        """Get merchant availability and status"""
         try:
-            logger.info(f"Checking merchant status: {merchant_info}")
+            # Try to parse as JSON first, then as Python dict format
+            try:
+                data = json.loads(input_data)
+            except json.JSONDecodeError:
+                # Convert single quotes to double quotes and try again
+                fixed_input = input_data.replace("'", '"')
+                data = json.loads(fixed_input)
             
-            # Call mock API
-            merchant_status = self.api.get_merchant_info(merchant_info)
-            
-            return json.dumps(merchant_status, indent=2)
-            
-        except Exception as e:
-            logger.error(f"Error getting merchant status: {str(e)}")
-            return json.dumps({
-                "error": f"Failed to get merchant status: {str(e)}",
-                "status": "error"
-            })
-    
-    def find_nearby_alternatives(self, search_params: str) -> str:
-        """
-        Find nearby alternative merchants or services
-        
-        Args:
-            search_params: Location, service type, and requirements
-            
-        Returns:
-            JSON string with alternative options
-        """
-        try:
-            logger.info(f"Finding nearby alternatives: {search_params}")
-            
-            # Parse search parameters
-            params = self._parse_search_params(search_params)
-            
-            # Call mock API
-            alternatives = self.api.find_nearby_merchants(
-                params.get('location', ''),
-                params.get('service_type', 'restaurant'),
-                params.get('requirements', {})
+            result = self.api.get_merchant_status(
+                merchant_id=data.get('merchant_id', ''),
+                location=data.get('location', '')
             )
-            
-            return json.dumps(alternatives, indent=2)
-            
-        except Exception as e:
-            logger.error(f"Error finding alternatives: {str(e)}")
+            return json.dumps(result)
+        except (json.JSONDecodeError, Exception) as e:
             return json.dumps({
-                "error": f"Failed to find alternatives: {str(e)}",
-                "status": "error"
+                'success': False,
+                'error': f'Invalid input format: {str(e)}',
+                'expected_format': '{"merchant_id": "merchant identifier", "location": "merchant location"}'
             })
     
-    def notify_customer(self, notification_params: str) -> str:
-        """
-        Send notifications to customers about delays, changes, or updates
-        
-        Args:
-            notification_params: Customer ID, message type, and details
-            
-        Returns:
-            JSON string with notification status
-        """
+    def notify_customer(self, input_data: str) -> str:
+        """Send customer notifications"""
         try:
-            logger.info(f"Sending customer notification: {notification_params}")
+            # Try to parse as JSON first, then as Python dict format
+            try:
+                data = json.loads(input_data)
+            except json.JSONDecodeError:
+                # Convert single quotes to double quotes and try again
+                fixed_input = input_data.replace("'", '"')
+                data = json.loads(fixed_input)
             
-            # Parse notification parameters
-            params = self._parse_notification_params(notification_params)
-            
-            # Call mock API
-            notification_result = self.api.send_customer_notification(
-                params.get('customer_id', ''),
-                params.get('message_type', 'update'),
-                params.get('message', ''),
-                params.get('details', {})
+            result = self.api.notify_customer(
+                customer_id=data.get('customer_id', ''),
+                message=data.get('message', ''),
+                notification_type=data.get('type', 'push')
             )
-            
-            return json.dumps(notification_result, indent=2)
-            
-        except Exception as e:
-            logger.error(f"Error sending notification: {str(e)}")
+            return json.dumps(result)
+        except (json.JSONDecodeError, Exception) as e:
             return json.dumps({
-                "error": f"Failed to send notification: {str(e)}",
-                "status": "error"
+                'success': False,
+                'error': f'Invalid input format: {str(e)}',
+                'expected_format': '{"customer_id": "customer identifier", "message": "notification message", "type": "sms/email/push"}'
             })
     
-    def contact_recipient(self, contact_params: str) -> str:
-        """
-        Contact delivery recipient via chat, call, or SMS
-        
-        Args:
-            contact_params: Recipient contact, message type, and urgency
-            
-        Returns:
-            JSON string with contact attempt results
-        """
+    def reroute_driver(self, input_data: str) -> str:
+        """Reroute or reassign driver"""
         try:
-            logger.info(f"Contacting recipient: {contact_params}")
+            # Try to parse as JSON first, then as Python dict format
+            try:
+                data = json.loads(input_data)
+            except json.JSONDecodeError:
+                # Convert single quotes to double quotes and try again
+                fixed_input = input_data.replace("'", '"')
+                data = json.loads(fixed_input)
             
-            # Parse contact parameters
-            params = self._parse_contact_params(contact_params)
-            
-            # Call mock API
-            contact_result = self.api.contact_recipient(
-                params.get('recipient_contact', ''),
-                params.get('message_type', 'delivery_update'),
-                params.get('urgency', 'normal')
+            result = self.api.reroute_driver(
+                driver_id=data.get('driver_id', ''),
+                new_route=data.get('new_route', ''),
+                priority=data.get('priority', 'medium')
             )
-            
-            return json.dumps(contact_result, indent=2)
-            
-        except Exception as e:
-            logger.error(f"Error contacting recipient: {str(e)}")
+            return json.dumps(result)
+        except (json.JSONDecodeError, Exception) as e:
             return json.dumps({
-                "error": f"Failed to contact recipient: {str(e)}",
-                "status": "error"
+                'success': False,
+                'error': f'Invalid input format: {str(e)}',
+                'expected_format': '{"driver_id": "driver identifier", "new_route": "optimized route", "priority": "high/medium/low"}'
             })
     
-    def reroute_driver(self, reroute_params: str) -> str:
-        """
-        Reassign or reroute driver to optimize efficiency
-        
-        Args:
-            reroute_params: Driver ID, new assignment, and priority
-            
-        Returns:
-            JSON string with rerouting results
-        """
+    def find_nearby_alternatives(self, input_data: str) -> str:
+        """Find alternative service options"""
         try:
-            logger.info(f"Rerouting driver: {reroute_params}")
+            # Try to parse as JSON first, then as Python dict format
+            try:
+                data = json.loads(input_data)
+            except json.JSONDecodeError:
+                # Convert single quotes to double quotes and try again
+                fixed_input = input_data.replace("'", '"')
+                data = json.loads(fixed_input)
             
-            # Parse reroute parameters
-            params = self._parse_reroute_params(reroute_params)
-            
-            # Call mock API
-            reroute_result = self.api.reroute_driver(
-                params.get('driver_id', ''),
-                params.get('new_assignment', {}),
-                params.get('priority', 'normal')
+            result = self.api.find_nearby_alternatives(
+                location=data.get('location', ''),
+                service_type=data.get('service_type', 'food'),
+                radius=data.get('radius', 5)
             )
-            
-            return json.dumps(reroute_result, indent=2)
-            
-        except Exception as e:
-            logger.error(f"Error rerouting driver: {str(e)}")
+            return json.dumps(result)
+        except (json.JSONDecodeError, Exception) as e:
             return json.dumps({
-                "error": f"Failed to reroute driver: {str(e)}",
-                "status": "error"
+                'success': False,
+                'error': f'Invalid input format: {str(e)}',
+                'expected_format': '{"location": "current location", "service_type": "food/mart/express", "radius": "search radius in km"}'
             })
     
-    def find_secure_location(self, location_params: str) -> str:
-        """
-        Find secure drop-off locations like lockers, concierge, or safe spots
-        
-        Args:
-            location_params: Address, package type, and security level
-            
-        Returns:
-            JSON string with secure location options
-        """
+    def initiate_refund(self, input_data: str) -> str:
+        """Process customer refund"""
         try:
-            logger.info(f"Finding secure location: {location_params}")
+            # Try to parse as JSON first, then as Python dict format
+            try:
+                data = json.loads(input_data)
+            except json.JSONDecodeError:
+                # Convert single quotes to double quotes and try again
+                fixed_input = input_data.replace("'", '"')
+                data = json.loads(fixed_input)
             
-            # Parse location parameters
-            params = self._parse_location_params(location_params)
-            
-            # Call mock API
-            secure_locations = self.api.find_secure_dropoff_locations(
-                params.get('address', ''),
-                params.get('package_type', 'standard'),
-                params.get('security_level', 'medium')
+            result = self.api.initiate_refund(
+                order_id=data.get('order_id', ''),
+                amount=data.get('amount', 0),
+                reason=data.get('reason', '')
             )
-            
-            return json.dumps(secure_locations, indent=2)
-            
-        except Exception as e:
-            logger.error(f"Error finding secure location: {str(e)}")
+            return json.dumps(result)
+        except (json.JSONDecodeError, Exception) as e:
             return json.dumps({
-                "error": f"Failed to find secure location: {str(e)}",
-                "status": "error"
+                'success': False,
+                'error': f'Invalid input format: {str(e)}',
+                'expected_format': '{"order_id": "order identifier", "amount": "refund amount", "reason": "refund reason"}'
             })
     
-    def initiate_refund(self, refund_params: str) -> str:
-        """
-        Process customer refunds or compensation for issues
-        
-        Args:
-            refund_params: Order ID, refund type, amount, and reason
-            
-        Returns:
-            JSON string with refund processing results
-        """
+    def contact_recipient(self, input_data: str) -> str:
+        """Contact delivery recipient"""
         try:
-            logger.info(f"Initiating refund: {refund_params}")
+            # Try to parse as JSON first, then as Python dict format
+            try:
+                data = json.loads(input_data)
+            except json.JSONDecodeError:
+                # Convert single quotes to double quotes and try again
+                fixed_input = input_data.replace("'", '"')
+                data = json.loads(fixed_input)
             
-            # Parse refund parameters
-            params = self._parse_refund_params(refund_params)
-            
-            # Call mock API
-            refund_result = self.api.process_refund(
-                params.get('order_id', ''),
-                params.get('refund_type', 'partial'),
-                params.get('amount', 0),
-                params.get('reason', '')
+            result = self.api.contact_recipient(
+                recipient_id=data.get('recipient_id', ''),
+                message=data.get('message', ''),
+                method=data.get('method', 'call')
             )
-            
-            return json.dumps(refund_result, indent=2)
-            
-        except Exception as e:
-            logger.error(f"Error processing refund: {str(e)}")
+            return json.dumps(result)
+        except (json.JSONDecodeError, Exception) as e:
             return json.dumps({
-                "error": f"Failed to process refund: {str(e)}",
-                "status": "error"
+                'success': False,
+                'error': f'Invalid input format: {str(e)}',
+                'expected_format': '{"recipient_id": "recipient identifier", "message": "contact message", "method": "call/sms/chat"}'
             })
     
-    def escalate_to_support(self, escalation_params: str) -> str:
-        """
-        Escalate complex issues to human support team
-        
-        Args:
-            escalation_params: Issue details, priority level, and customer info
-            
-        Returns:
-            JSON string with escalation results
-        """
+    def find_secure_location(self, input_data: str) -> str:
+        """Find secure drop-off/pickup locations"""
         try:
-            logger.info(f"Escalating to support: {escalation_params}")
+            # Try to parse as JSON first, then as Python dict format
+            try:
+                data = json.loads(input_data)
+            except json.JSONDecodeError:
+                # Convert single quotes to double quotes and try again
+                fixed_input = input_data.replace("'", '"')
+                data = json.loads(fixed_input)
             
-            # Parse escalation parameters
-            params = self._parse_escalation_params(escalation_params)
-            
-            # Call mock API
-            escalation_result = self.api.escalate_to_human_support(
-                params.get('issue_details', ''),
-                params.get('priority_level', 'medium'),
-                params.get('customer_info', {})
+            result = self.api.find_secure_location(
+                area=data.get('area', ''),
+                location_type=data.get('type', 'dropoff'),
+                requirements=data.get('requirements', '')
             )
-            
-            return json.dumps(escalation_result, indent=2)
-            
-        except Exception as e:
-            logger.error(f"Error escalating to support: {str(e)}")
+            return json.dumps(result)
+        except (json.JSONDecodeError, Exception) as e:
             return json.dumps({
-                "error": f"Failed to escalate to support: {str(e)}",
-                "status": "error"
+                'success': False,
+                'error': f'Invalid input format: {str(e)}',
+                'expected_format': '{"area": "target area", "type": "dropoff/pickup", "requirements": "security/accessibility needs"}'
             })
     
-    # Helper methods to parse various parameter formats
-    def _parse_route_info(self, route_info: str) -> Dict[str, Any]:
-        """Parse route information string into structured data"""
-        parts = route_info.lower().split(' to ')
-        if len(parts) >= 2:
-            return {
-                'origin': parts[0].strip(),
-                'destination': parts[1].strip(),
-                'route_name': route_info
-            }
-        return {'route_name': route_info}
+    def update_order_status(self, input_data: str) -> str:
+        """Update order status and tracking"""
+        try:
+            # Try to parse as JSON first, then as Python dict format
+            try:
+                data = json.loads(input_data)
+            except json.JSONDecodeError:
+                # Convert single quotes to double quotes and try again
+                fixed_input = input_data.replace("'", '"')
+                data = json.loads(fixed_input)
+            
+            result = self.api.update_order_status(
+                order_id=data.get('order_id', ''),
+                status=data.get('status', ''),
+                notes=data.get('notes', '')
+            )
+            return json.dumps(result)
+        except (json.JSONDecodeError, Exception) as e:
+            return json.dumps({
+                'success': False,
+                'error': f'Invalid input format: {str(e)}',
+                'expected_format': '{"order_id": "order identifier", "status": "new status", "notes": "additional notes"}'
+            })
     
-    def _parse_route_params(self, params: str) -> Dict[str, Any]:
-        """Parse route parameters string"""
-        result = {}
-        parts = params.split(',')
-        
-        for part in parts:
-            if 'origin:' in part.lower():
-                result['origin'] = part.split(':', 1)[1].strip()
-            elif 'destination:' in part.lower():
-                result['destination'] = part.split(':', 1)[1].strip()
-            elif 'avoid:' in part.lower():
-                avoid_areas = part.split(':', 1)[1].strip().split(';')
-                result['avoid_areas'] = [area.strip() for area in avoid_areas]
-        
-        return result
-    
-    def _parse_search_params(self, params: str) -> Dict[str, Any]:
-        """Parse search parameters string"""
-        result = {}
-        parts = params.split(',')
-        
-        for part in parts:
-            if 'location:' in part.lower():
-                result['location'] = part.split(':', 1)[1].strip()
-            elif 'type:' in part.lower():
-                result['service_type'] = part.split(':', 1)[1].strip()
-            elif 'cuisine:' in part.lower():
-                if 'requirements' not in result:
-                    result['requirements'] = {}
-                result['requirements']['cuisine'] = part.split(':', 1)[1].strip()
-        
-        return result
-    
-    def _parse_notification_params(self, params: str) -> Dict[str, Any]:
-        """Parse notification parameters string"""
-        result = {}
-        parts = params.split(',')
-        
-        for part in parts:
-            if 'customer:' in part.lower():
-                result['customer_id'] = part.split(':', 1)[1].strip()
-            elif 'type:' in part.lower():
-                result['message_type'] = part.split(':', 1)[1].strip()
-            elif 'message:' in part.lower():
-                result['message'] = part.split(':', 1)[1].strip()
-        
-        return result
-    
-    def _parse_contact_params(self, params: str) -> Dict[str, Any]:
-        """Parse contact parameters string"""
-        result = {}
-        parts = params.split(',')
-        
-        for part in parts:
-            if 'contact:' in part.lower():
-                result['recipient_contact'] = part.split(':', 1)[1].strip()
-            elif 'type:' in part.lower():
-                result['message_type'] = part.split(':', 1)[1].strip()
-            elif 'urgency:' in part.lower():
-                result['urgency'] = part.split(':', 1)[1].strip()
-        
-        return result
-    
-    def _parse_reroute_params(self, params: str) -> Dict[str, Any]:
-        """Parse reroute parameters string"""
-        result = {}
-        parts = params.split(',')
-        
-        for part in parts:
-            if 'driver:' in part.lower():
-                result['driver_id'] = part.split(':', 1)[1].strip()
-            elif 'assignment:' in part.lower():
-                result['new_assignment'] = {'type': part.split(':', 1)[1].strip()}
-            elif 'priority:' in part.lower():
-                result['priority'] = part.split(':', 1)[1].strip()
-        
-        return result
-    
-    def _parse_location_params(self, params: str) -> Dict[str, Any]:
-        """Parse location parameters string"""
-        result = {}
-        parts = params.split(',')
-        
-        for part in parts:
-            if 'address:' in part.lower():
-                result['address'] = part.split(':', 1)[1].strip()
-            elif 'package:' in part.lower():
-                result['package_type'] = part.split(':', 1)[1].strip()
-            elif 'security:' in part.lower():
-                result['security_level'] = part.split(':', 1)[1].strip()
-        
-        return result
-    
-    def _parse_refund_params(self, params: str) -> Dict[str, Any]:
-        """Parse refund parameters string"""
-        result = {}
-        parts = params.split(',')
-        
-        for part in parts:
-            if 'order:' in part.lower():
-                result['order_id'] = part.split(':', 1)[1].strip()
-            elif 'type:' in part.lower():
-                result['refund_type'] = part.split(':', 1)[1].strip()
-            elif 'amount:' in part.lower():
-                try:
-                    result['amount'] = float(part.split(':', 1)[1].strip())
-                except ValueError:
-                    result['amount'] = 0
-            elif 'reason:' in part.lower():
-                result['reason'] = part.split(':', 1)[1].strip()
-        
-        return result
-    
-    def _parse_escalation_params(self, params: str) -> Dict[str, Any]:
-        """Parse escalation parameters string"""
-        result = {}
-        parts = params.split(',')
-        
-        for part in parts:
-            if 'issue:' in part.lower():
-                result['issue_details'] = part.split(':', 1)[1].strip()
-            elif 'priority:' in part.lower():
-                result['priority_level'] = part.split(':', 1)[1].strip()
-            elif 'customer:' in part.lower():
-                result['customer_info'] = {'id': part.split(':', 1)[1].strip()}
-        
-        return result
+    def coordinate_with_support(self, input_data: str) -> str:
+        """Coordinate with human support teams"""
+        try:
+            # Try to parse as JSON first, then as Python dict format
+            try:
+                data = json.loads(input_data)
+            except json.JSONDecodeError:
+                # Convert single quotes to double quotes and try again
+                fixed_input = input_data.replace("'", '"')
+                data = json.loads(fixed_input)
+            
+            result = self.api.coordinate_with_support(
+                issue_type=data.get('issue_type', ''),
+                priority=data.get('priority', 'medium'),
+                details=data.get('details', '')
+            )
+            return json.dumps(result)
+        except (json.JSONDecodeError, Exception) as e:
+            return json.dumps({
+                'success': False,
+                'error': f'Invalid input format: {str(e)}',
+                'expected_format': '{"issue_type": "issue category", "priority": "urgency level", "details": "issue details"}'
+            })
